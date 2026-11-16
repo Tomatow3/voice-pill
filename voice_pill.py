@@ -200,7 +200,7 @@ def transcribe_once(audio, lang):
     """Распознаёт с принудительным языком, возвращает текст и уверенность."""
     segments, info = model.transcribe(
         audio, language=lang, beam_size=1,
-        without_condition_on_previous_text=True,
+        condition_on_previous_text=False,
     )
     parts, logprobs = [], []
     for s in segments:
