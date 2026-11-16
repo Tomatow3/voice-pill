@@ -33,7 +33,7 @@ pip install faster-whisper sounddevice keyboard pyperclip
 | Параметр | По умолчанию | Что делает |
 |---|---|---|
 | `MODEL_SIZE` | `"base"` | модель Whisper: `tiny`/`base`/`small`/`medium` — больше = точнее и медленнее |
-| `LANGUAGE` | `"ru"` | язык распознавания |
+| `LANGUAGE` | `None` | `None` — авто-определение (русский и английский); можно `"ru"` или `"en"` принудительно |
 
 ## Откат
 

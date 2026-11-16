@@ -22,7 +22,7 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 
 MODEL_SIZE = "base"
-LANGUAGE = "ru"
+LANGUAGE = None    # None = авто-определение (русский и английский), или "ru"/"en" принудительно
 
 user32 = ctypes.windll.user32
 
@@ -191,7 +191,7 @@ def transcribe_and_paste(audio):
             set_pill("🤷", "Ничего не услышал")
             fade_out(1200)
             return
-        segments, _ = model.transcribe(
+        segments, info = model.transcribe(
             audio, language=LANGUAGE, beam_size=1,
             without_condition_on_previous_text=True,
         )
@@ -219,7 +219,8 @@ def transcribe_and_paste(audio):
                 pass
         state = "idle"
         short = text[:42] + "..." if len(text) > 42 else text
-        set_pill("✅", short, GREEN)
+        icon = "🇬🇧" if (LANGUAGE is None and info.language == "en") else ("🇷🇺" if LANGUAGE is None else "✅")
+        set_pill(icon, short, GREEN)
         fade_out(1600)
     except Exception as e:
         state = "idle"
