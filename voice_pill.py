@@ -12,6 +12,9 @@ Win-комбинации не ломаются (библиотека keyboard н
 
 Откат: удалить папку D:\AI\voice-input, ярлыки на рабочем столе и в shell:startup.
 """
+import os
+os.environ.setdefault("HF_HOME", r"D:\AI\huggingface")   # модели качаются на D:
+
 import ctypes
 import ctypes.wintypes as wintypes
 import random
@@ -26,7 +29,7 @@ import pyperclip
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-MODEL_SIZE = "base"
+MODEL_SIZE = "small"
 LANGUAGE = None    # None = авто-определение (рус + англ), или "ru"/"en"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -193,16 +196,35 @@ def stop_rec():
     threading.Thread(target=transcribe_and_paste, args=(audio,), daemon=True).start()
 
 
+def transcribe_once(audio, lang):
+    """Распознаёт с принудительным языком, возвращает текст и уверенность."""
+    segments, info = model.transcribe(
+        audio, language=lang, beam_size=1,
+        without_condition_on_previous_text=True,
+    )
+    parts, logprobs = [], []
+    for s in segments:
+        t = s.text.strip()
+        if t:
+            parts.append(t)
+            logprobs.append(s.avg_logprob)
+    text = " ".join(parts).strip()
+    score = sum(logprobs) / len(logprobs) if logprobs else -99.0
+    return text, score, info
+
+
 def transcribe_and_paste(audio):
     try:
         if audio is None or len(audio) < samplerate * 0.3:
             _done("🤷", "Ничего не услышал")
             return
-        segments, info = model.transcribe(
-            audio, language=LANGUAGE, beam_size=1,
-            without_condition_on_previous_text=True,
-        )
-        text = " ".join(s.text.strip() for s in segments).strip()
+        text, score, info = transcribe_once(audio, LANGUAGE)
+        # низкая уверенность → пробуем второй язык, берём того, кто увереннее
+        if LANGUAGE is None and score < -0.55 and len(audio) > samplerate:
+            alt = "en" if info.language == "ru" else "ru"
+            text2, score2, info2 = transcribe_once(audio, alt)
+            if text2 and score2 > score:
+                text, info = text2, info2
         if not text:
             _done("🤷", "Ничего не услышал")
             return
