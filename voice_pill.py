@@ -219,11 +219,14 @@ def transcribe_and_paste(audio):
             _done("🤷", "Ничего не услышал")
             return
         text, score, info = transcribe_once(audio, LANGUAGE)
-        # низкая уверенность → пробуем второй язык, берём того, кто увереннее
-        if LANGUAGE is None and score < -0.55 and len(audio) > samplerate:
+        _log(f"lang={info.language} prob={getattr(info, 'language_probability', 0):.2f} score={score:.2f} text={text[:50]}")
+        # фолбэк только если авто-детект реально сомневался
+        low_conf = getattr(info, "language_probability", 1.0) < 0.8
+        if LANGUAGE is None and low_conf and score < -0.5 and len(audio) > samplerate:
             alt = "en" if info.language == "ru" else "ru"
             text2, score2, info2 = transcribe_once(audio, alt)
-            if text2 and score2 > score:
+            _log(f"fallback->{alt} score2={score2:.2f} text2={text2[:50]}")
+            if text2 and score2 > score + 0.25:
                 text, info = text2, info2
         if not text:
             _done("🤷", "Ничего не услышал")
@@ -248,6 +251,17 @@ def transcribe_and_paste(audio):
         _done(icon, short, GREEN)
     except Exception as e:
         _done("❌", str(e)[:42], RED)
+
+
+LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log.txt")
+
+
+def _log(msg):
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
 
 
 def _done(icon, text, color=FG):
