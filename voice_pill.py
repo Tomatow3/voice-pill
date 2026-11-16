@@ -5,10 +5,15 @@ Voice Pill — локальный голосовой ввод в стиле Wind
 Win+H          - показать плашку и начать запись
 Win+H ещё раз  - остановить, распознать, вставить текст в окно, где ты был
 Клик по плашке - то же самое (фокус она не забирает)
+Ctrl+Alt+Q     - запасное сочетание
+
+Свой низкоуровневый хук клавиатуры: Пуск от Win+H не открывается,
+Win-комбинации не ломаются (библиотека keyboard не используется).
 
 Откат: удалить папку D:\AI\voice-input, ярлыки на рабочем столе и в shell:startup.
 """
 import ctypes
+import ctypes.wintypes as wintypes
 import random
 import socket
 import sys
@@ -22,9 +27,10 @@ import sounddevice as sd
 from faster_whisper import WhisperModel
 
 MODEL_SIZE = "base"
-LANGUAGE = None    # None = авто-определение (русский и английский), или "ru"/"en" принудительно
+LANGUAGE = None    # None = авто-определение (рус + англ), или "ru"/"en"
 
-user32 = ctypes.windll.user32
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32")
 
 # ---------- защита от второго запуска ----------
 try:
@@ -37,7 +43,7 @@ model = None
 state = "idle"          # idle | rec | proc
 audio_chunks = []
 samplerate = 16000
-target_hwnd = None      # окно, куда вставлять текст
+target_hwnd = None
 
 
 def beep(freq, dur=110):
@@ -58,14 +64,19 @@ def remember_target():
 
 
 def restore_target():
-    if not target_hwnd:
+    if not target_hwnd or user32.GetForegroundWindow() == target_hwnd:
         return
-    if user32.GetForegroundWindow() == target_hwnd:
-        return
-    user32.keybd_event(0x12, 0, 0, 0)          # ALT down: обход блокировки смены фокуса
+    user32.keybd_event(0x12, 0, 0, 0)          # ALT down: обход блокировки фокуса
     user32.SetForegroundWindow(target_hwnd)
-    user32.keybd_event(0x12, 0, 2, 0)          # ALT up
+    user32.keybd_event(0x12, 0, 2, 0)
     time.sleep(0.15)
+
+
+def send_ctrl_v():
+    user32.keybd_event(0x11, 0, 0, 0)          # Ctrl down
+    user32.keybd_event(0x56, 0, 0, 0)          # V down
+    user32.keybd_event(0x56, 0, 2, 0)          # V up
+    user32.keybd_event(0x11, 0, 2, 0)          # Ctrl up
 
 
 # =====================  GUI  =====================
@@ -133,7 +144,7 @@ def animate_rec():
     for i, bid in enumerate(bar_ids):
         h = random.randint(5, 24)
         canvas.coords(bid, x0 + i * 11, cy - h / 2, x0 + i * 11 + 6, cy + h / 2)
-        canvas.itemconfig(bid, state="normal", fill=BLUE)
+        canvas.itemconfig(b, state="normal", fill=BLUE)
     root.after(110, animate_rec)
 
 
@@ -144,7 +155,6 @@ def animate_proc(i=0):
     root.after(250, lambda: animate_proc(i + 1))
 
 
-# окно не забирает фокус и не видно в панели задач
 def noactivate():
     root.update_idletasks()
     hwnd = user32.GetParent(root.winfo_id())
@@ -154,7 +164,7 @@ def noactivate():
 root.after(50, noactivate)
 
 
-# =====================  запись и распознавание  =====================
+# =====================  логика записи  =====================
 def start_rec():
     global state, audio_chunks, stream_obj
     remember_target()
@@ -184,12 +194,9 @@ def stop_rec():
 
 
 def transcribe_and_paste(audio):
-    global state
     try:
         if audio is None or len(audio) < samplerate * 0.3:
-            state = "idle"
-            set_pill("🤷", "Ничего не услышал")
-            fade_out(1200)
+            _done("🤷", "Ничего не услышал")
             return
         segments, info = model.transcribe(
             audio, language=LANGUAGE, beam_size=1,
@@ -197,9 +204,7 @@ def transcribe_and_paste(audio):
         )
         text = " ".join(s.text.strip() for s in segments).strip()
         if not text:
-            state = "idle"
-            set_pill("🤷", "Ничего не услышал")
-            fade_out(1200)
+            _done("🤷", "Ничего не услышал")
             return
         old = None
         try:
@@ -209,29 +214,33 @@ def transcribe_and_paste(audio):
         pyperclip.copy(text)
         restore_target()
         time.sleep(0.05)
-        import keyboard
-        keyboard.send("ctrl+v")
+        send_ctrl_v()
         time.sleep(0.35)
         if old is not None:
             try:
                 pyperclip.copy(old)
             except Exception:
                 pass
-        state = "idle"
         short = text[:42] + "..." if len(text) > 42 else text
         icon = "🇬🇧" if (LANGUAGE is None and info.language == "en") else ("🇷🇺" if LANGUAGE is None else "✅")
-        set_pill(icon, short, GREEN)
-        fade_out(1600)
+        _done(icon, short, GREEN)
     except Exception as e:
-        state = "idle"
-        set_pill("❌", str(e)[:42], RED)
-        fade_out(2000)
+        _done("❌", str(e)[:42], RED)
+
+
+def _done(icon, text, color=FG):
+    global state
+    state = "idle"
+    set_pill(icon, text, color)
+    fade_out(1600)
 
 
 def toggle():
+    root.after(0, _toggle)   # всё действие — только в главном потоке Tk
+
+
+def _toggle():
     global state
-    # трюк против меню Пуск: Win видит "другую" клавишу и не открывает Пуск на отпускании
-    threading.Thread(target=lambda: keyboard.press_and_release("f15"), daemon=True).start()
     if state == "rec":
         stop_rec()
     elif state == "idle":
@@ -243,11 +252,67 @@ def toggle():
         start_rec()
 
 
-# =====================  хоткеи  =====================
-import keyboard
+# =====================  свой низкоуровневый хук клавиатуры  =====================
+WH_KEYBOARD_LL = 13
+WM_KEYDOWN, WM_KEYUP = 0x0100, 0x0101
+WM_SYSKEYDOWN, WM_SYSKEYUP = 0x0104, 0x0105
+VK_LWIN, VK_RWIN, VK_H, VK_Q = 0x5B, 0x5C, 0x48, 0x51
+VK_CONTROL, VK_MENU = 0x11, 0x12
 
-keyboard.add_hotkey("win+h", toggle, suppress=True)
-keyboard.add_hotkey("ctrl+alt+q", toggle, suppress=True)
+win_down = [False]
+combo_used = [False]
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("vkCode", wintypes.DWORD), ("scanCode", wintypes.DWORD),
+                ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))]
+
+
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM,
+                              ctypes.POINTER(KBDLLHOOKSTRUCT))
+
+
+def ll_handler(nCode, wParam, lParam):
+    if nCode >= 0:
+        vk = lParam.contents.vkCode
+        is_up = wParam in (WM_KEYUP, WM_SYSKEYUP)
+
+        if vk in (VK_LWIN, VK_RWIN):
+            if is_up:
+                if combo_used[0]:
+                    combo_used[0] = False
+                    return 1   # глушим отпускание Win — Пуск не откроется
+                win_down[0] = False
+            else:
+                win_down[0] = True
+
+        elif vk == VK_H and win_down[0]:
+            if not is_up:
+                combo_used[0] = True
+                threading.Thread(target=toggle, daemon=True).start()
+            return 1   # H при зажатом Win целиком глушим
+
+        elif vk == VK_Q and not is_up:
+            ctrl = user32.GetAsyncKeyState(VK_CONTROL) & 0x8000
+            alt = user32.GetAsyncKeyState(VK_MENU) & 0x8000
+            if ctrl and alt:
+                threading.Thread(target=toggle, daemon=True).start()
+                return 1
+
+    return user32.CallNextHookEx(None, nCode, wParam, lParam)
+
+
+def hook_thread():
+    global _proc
+    _proc = HOOKPROC(ll_handler)
+    hhk = user32.SetWindowsHookExW(WH_KEYBOARD_LL, _proc, kernel32.GetModuleHandleW(None), 0)
+    msg = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+        pass
+
+
+threading.Thread(target=hook_thread, daemon=True).start()
 
 root.withdraw()
 threading.Thread(target=load_model, daemon=True).start()
